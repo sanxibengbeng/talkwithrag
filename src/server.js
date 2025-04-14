@@ -4,15 +4,24 @@ const { BedrockAgentRuntimeClient, RetrieveAndGenerateStreamCommand } = require(
 const path = require('path');
 const fs = require('fs').promises;
 const { v4: uuidv4 } = require('uuid');
+const http = require('http');
+const WebSocket = require('ws');
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+// Create HTTP server
+const server = http.createServer(app);
+
+// Create WebSocket server
+const wss = new WebSocket.Server({ server });
 
 // AWS Configuration
 const MODEL_REGION = 'us-west-2';
 const RAG_REGION = 'us-east-1';
 const KNOWLEDGE_BASE_ID = 'YUX1OWHQBE';
-const MODEL_ID = 'anthropic.claude-3-5-haiku-20241022-v1:0';
+//const MODEL_ID = 'anthropic.claude-3-5-haiku-20241022-v1:0';
+const MODEL_ID = 'anthropic.claude-3-5-sonnet-20240620-v1:0';
 
 const bedrockRuntime = new BedrockRuntimeClient({ region: MODEL_REGION });
 const bedrockAgentRuntime = new BedrockAgentRuntimeClient({ region: RAG_REGION });
@@ -24,6 +33,104 @@ app.use(express.static(path.join(__dirname, 'public')));
 const chatSessions = new Map();
 const MAX_HISTORY_LENGTH = 20; // Limit stored chat history
 const MAX_SUMMARY_HISTORY = 10; // Limit messages sent for summarization
+
+// WebSocket connections map
+const wsConnections = new Map();
+
+// WebSocket connection handler
+wss.on('connection', (ws, req) => {
+    console.log('WebSocket client connected');
+    
+    // Handle messages from client
+    ws.on('message', async (message) => {
+        try {
+            const data = JSON.parse(message);
+            console.log('Received message:', data);
+            
+            // Handle different message types
+            if (data.type === 'register') {
+                // Register this connection with a session ID
+                wsConnections.set(data.sessionId, ws);
+                console.log(`WebSocket registered for session: ${data.sessionId}`);
+                
+                // Send acknowledgment
+                ws.send(JSON.stringify({
+                    type: 'registered',
+                    sessionId: data.sessionId
+                }));
+            } 
+            else if (data.type === 'chat') {
+                // Process chat message
+                const { message, sessionId } = data;
+                
+                // Validate request
+                if (!message || !sessionId) {
+                    ws.send(JSON.stringify({
+                        type: 'error',
+                        message: 'Missing message or sessionId'
+                    }));
+                    return;
+                }
+                
+                // Use server-stored history
+                let currentHistory = chatSessions.get(sessionId) || [];
+                
+                // Limit history for summarization
+                const historyForSummary = currentHistory.slice(-MAX_SUMMARY_HISTORY);
+                const summarizedContent = await summarizeHistory(historyForSummary, message);
+                
+                // Send start event
+                ws.send(JSON.stringify({ type: 'start' }));
+                
+                // Stream RAG response
+                try {
+                    const ragResponse = await streamRAG(summarizedContent, ws);
+                    
+                    // Update and limit chat history
+                    currentHistory.push({ role: 'user', content: message });
+                    currentHistory.push({ role: 'assistant', content: ragResponse.text });
+                    if (currentHistory.length > MAX_HISTORY_LENGTH) {
+                        currentHistory = currentHistory.slice(-MAX_HISTORY_LENGTH);
+                    }
+                    chatSessions.set(sessionId, currentHistory);
+                    
+                    // Send done event
+                    ws.send(JSON.stringify({ type: 'done' }));
+                } catch (error) {
+                    console.error('Error in RAG processing:', error);
+                    ws.send(JSON.stringify({
+                        type: 'error',
+                        message: `RAG error: ${error.message}`
+                    }));
+                }
+            }
+        } catch (error) {
+            console.error('Error processing WebSocket message:', error);
+            ws.send(JSON.stringify({
+                type: 'error',
+                message: `Error: ${error.message}`
+            }));
+        }
+    });
+    
+    // Handle disconnection
+    ws.on('close', () => {
+        console.log('WebSocket client disconnected');
+        // Remove connection from the map (find by value)
+        for (const [sessionId, connection] of wsConnections.entries()) {
+            if (connection === ws) {
+                wsConnections.delete(sessionId);
+                console.log(`Removed connection for session: ${sessionId}`);
+                break;
+            }
+        }
+    });
+    
+    // Handle errors
+    ws.on('error', (error) => {
+        console.error('WebSocket error:', error);
+    });
+});
 
 // Summarize chat history using Claude
 async function summarizeHistory(history, message) {
@@ -74,7 +181,7 @@ ${fullConversation.map(msg => `${msg.role === 'user' ? '客户' : '客服'}: ${m
 }
 
 // Stream response from RAG knowledge base
-async function streamRAG(question, res) {
+async function streamRAG(question, ws) {
     const input = {
         input: { text: question },
         retrieveAndGenerateConfiguration: {
@@ -97,9 +204,6 @@ async function streamRAG(question, res) {
         let responseSessionId = null;
         let hasChunks = false;
 
-        // Send initial event to clear loading state
-        res.write(`data: ${JSON.stringify({ type: 'start' })}\n\n`);
-
         for await (const event of response.stream) {
             // Log event type for debugging
             const eventTypes = Object.keys(event);
@@ -114,8 +218,11 @@ async function streamRAG(question, res) {
                 // Append to full text
                 fullText += textChunk;
                 
-                // Send chunk to client
-                res.write(`data: ${JSON.stringify({ type: 'chunk', content: textChunk })}\n\n`);
+                // Send chunk to client via WebSocket
+                ws.send(JSON.stringify({ 
+                    type: 'chunk', 
+                    content: textChunk 
+                }));
             } 
             // Handle retrieval results (citations)
             else if (event.retrievalResults) {
@@ -141,7 +248,10 @@ async function streamRAG(question, res) {
                                 if (citationUrl) {
                                     citation = citationUrl; // Store the last citation
                                     console.log("Sending citation:", citationUrl);
-                                    res.write(`data: ${JSON.stringify({ type: 'citation', citation: citationUrl })}\n\n`);
+                                    ws.send(JSON.stringify({ 
+                                        type: 'citation', 
+                                        citation: citationUrl 
+                                    }));
                                 }
                             }
                         }
@@ -157,7 +267,10 @@ async function streamRAG(question, res) {
                 try {
                     if (event.metadata.sessionId) {
                         responseSessionId = event.metadata.sessionId;
-                        res.write(`data: ${JSON.stringify({ type: 'metadata', sessionId: responseSessionId })}\n\n`);
+                        ws.send(JSON.stringify({ 
+                            type: 'metadata', 
+                            sessionId: responseSessionId 
+                        }));
                     }
                 } catch (error) {
                     console.error("Error processing metadata:", error);
@@ -172,12 +285,11 @@ async function streamRAG(question, res) {
         // If no chunks were received, send an error
         if (!hasChunks) {
             console.warn("No text chunks received from the stream");
-            res.write(`data: ${JSON.stringify({ type: 'error', message: 'No response generated. Please try again.' })}\n\n`);
+            ws.send(JSON.stringify({ 
+                type: 'error', 
+                message: 'No response generated. Please try again.' 
+            }));
         }
-        
-        // Send completion event
-        console.log("Sending done event");
-        res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
         
         return { 
             text: fullText, 
@@ -186,73 +298,15 @@ async function streamRAG(question, res) {
         };
     } catch (error) {
         console.error('Error in streaming RAG:', error);
-        res.write(`data: ${JSON.stringify({ type: 'error', message: `RAG error: ${error.message}` })}\n\n`);
+        ws.send(JSON.stringify({ 
+            type: 'error', 
+            message: `RAG error: ${error.message}` 
+        }));
         throw error;
     }
 }
 
-// Main chat endpoint with streaming
-app.post('/api/chat', async (req, res) => {
-    const { message, sessionId } = req.body;
-
-    // Validate request
-    if (!message || !sessionId) {
-        res.status(400).json({ error: 'Missing message or sessionId' });
-        return;
-    }
-
-    // Set SSE headers
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-
-    try {
-        // Use server-stored history
-        let currentHistory = chatSessions.get(sessionId) || [];
-
-        // Limit history for summarization
-        const historyForSummary = currentHistory.slice(-MAX_SUMMARY_HISTORY);
-        const summarizedContent = await summarizeHistory(historyForSummary, message);
-
-        // Stream RAG response
-        const ragResponse = await streamRAG(summarizedContent, res);
-
-        // Update and limit chat history
-        currentHistory.push({ role: 'user', content: message });
-        currentHistory.push({ role: 'assistant', content: ragResponse.text });
-        if (currentHistory.length > MAX_HISTORY_LENGTH) {
-            currentHistory = currentHistory.slice(-MAX_HISTORY_LENGTH);
-        }
-        chatSessions.set(sessionId, currentHistory);
-
-        res.end();
-    } catch (error) {
-        console.error('Error processing chat:', error);
-        res.write(`data: ${JSON.stringify({ type: 'error', message: `Server error: ${error.message}` })}\n\n`);
-        res.end();
-    }
-});
-
-// Set up SSE endpoint
-app.get('/api/chat', (req, res) => {
-    // Set headers for SSE
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    
-    // Keep connection alive
-    const keepAlive = setInterval(() => {
-        res.write(': keepalive\n\n');
-    }, 15000);
-    
-    // Handle client disconnect
-    req.on('close', () => {
-        clearInterval(keepAlive);
-        res.end();
-    });
-});
-
 // Start server
-app.listen(port, () => {
+server.listen(port, () => {
     console.log(`Server running on port ${port}`);
 });

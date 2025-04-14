@@ -9,6 +9,150 @@ document.addEventListener('DOMContentLoaded', () => {
     // Current chat session ID
     let currentSessionId = generateSessionId();
     
+    // WebSocket connection
+    let socket = null;
+    let isConnected = false;
+    
+    // Connect to WebSocket server
+    function connectWebSocket() {
+        // Create WebSocket connection
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}`;
+        
+        socket = new WebSocket(wsUrl);
+        
+        // Connection opened
+        socket.addEventListener('open', (event) => {
+            console.log('WebSocket connected');
+            isConnected = true;
+            
+            // Register this connection with the current session ID
+            socket.send(JSON.stringify({
+                type: 'register',
+                sessionId: currentSessionId
+            }));
+        });
+        
+        // Listen for messages
+        socket.addEventListener('message', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                console.log('Received WebSocket message:', data);
+                
+                // Handle different message types
+                handleWebSocketMessage(data);
+            } catch (error) {
+                console.error('Error parsing WebSocket message:', error);
+            }
+        });
+        
+        // Connection closed
+        socket.addEventListener('close', (event) => {
+            console.log('WebSocket disconnected');
+            isConnected = false;
+            
+            // Attempt to reconnect after a delay
+            setTimeout(() => {
+                if (!isConnected) {
+                    console.log('Attempting to reconnect WebSocket...');
+                    connectWebSocket();
+                }
+            }, 3000);
+        });
+        
+        // Connection error
+        socket.addEventListener('error', (event) => {
+            console.error('WebSocket error:', event);
+            isConnected = false;
+        });
+    }
+    
+    // Handle WebSocket messages
+    let currentBotMessageElement = null;
+    let currentResponseText = '';
+    let currentResponseCitation = null;
+    
+    function handleWebSocketMessage(data) {
+        // Ensure we have a bot message element to update
+        if (!currentBotMessageElement) {
+            return;
+        }
+        
+        switch (data.type) {
+            case 'registered':
+                console.log('WebSocket registered with session ID:', data.sessionId);
+                break;
+                
+            case 'start':
+                // Clear the "Thinking..." message when streaming starts
+                currentBotMessageElement.innerHTML = '';
+                currentResponseText = '';
+                currentResponseCitation = null;
+                break;
+                
+            case 'metadata':
+                // Clear the "Thinking..." message if not already cleared
+                if (currentBotMessageElement.innerHTML.includes('Thinking')) {
+                    currentBotMessageElement.innerHTML = '';
+                }
+                break;
+                
+            case 'chunk':
+                // Append chunk to response text
+                currentResponseText += data.content;
+                // Update the message with current text
+                currentBotMessageElement.innerHTML = currentResponseText.replace(/\n/g, '<br>');
+                // Scroll to bottom
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                break;
+                
+            case 'citation':
+                currentResponseCitation = data.citation;
+                console.log("Received citation:", data.citation);
+                break;
+                
+            case 'done':
+                // If we got 'done' but no text, show an error
+                if (!currentResponseText) {
+                    currentBotMessageElement.innerHTML = 'No response received. Please try again.';
+                    return;
+                }
+                
+                // Add citation if available
+                if (currentResponseCitation) {
+                    const citationElement = document.createElement('div');
+                    citationElement.className = 'citation';
+                    citationElement.innerHTML = `<a href="${currentResponseCitation}" target="_blank" rel="noopener noreferrer">Source</a>`;
+                    currentBotMessageElement.appendChild(citationElement);
+                }
+                
+                // Get the last user message
+                const lastUserMessage = messageInput.dataset.lastMessage || '';
+                
+                // Update chat session
+                updateChatSession(currentSessionId, lastUserMessage, currentResponseText);
+                
+                // Update chat history title with summary
+                updateChatHistoryTitle(currentSessionId, lastUserMessage);
+                
+                // Reset current message tracking
+                currentBotMessageElement = null;
+                break;
+                
+            case 'error':
+                currentBotMessageElement.innerHTML = `Error: ${data.message || 'Unknown error'}`;
+                // Reset current message tracking
+                currentBotMessageElement = null;
+                break;
+                
+            default:
+                console.warn('Unknown WebSocket message type:', data.type);
+        }
+    }
+    
+    // Initialize WebSocket connection
+    connectWebSocket();
+    
     // Load chat sessions from localStorage
     loadChatSessions();
     
@@ -25,6 +169,14 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Set this as active chat
         setActiveChat(currentSessionId);
+        
+        // Register new session with WebSocket if connected
+        if (isConnected) {
+            socket.send(JSON.stringify({
+                type: 'register',
+                sessionId: currentSessionId
+            }));
+        }
     });
     
     // Handle form submission
@@ -34,6 +186,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const message = messageInput.value.trim();
         if (!message) return;
         
+        // Store the message for later use
+        messageInput.dataset.lastMessage = message;
+        
         // Add user message to UI
         addMessage(message, 'user');
         
@@ -41,136 +196,32 @@ document.addEventListener('DOMContentLoaded', () => {
         messageInput.value = '';
         
         try {
+            // Check if WebSocket is connected
+            if (!isConnected) {
+                addMessage('Connection to server lost. Trying to reconnect...', 'bot');
+                connectWebSocket();
+                return;
+            }
+            
             // Create message container for bot response
             const botMessageElement = document.createElement('div');
             botMessageElement.className = 'message bot-message';
             botMessageElement.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div> Thinking...';
             chatMessages.appendChild(botMessageElement);
             
+            // Set as current bot message element for WebSocket updates
+            currentBotMessageElement = botMessageElement;
+            
             // Get chat history for this session
             const chatSession = getChatSession(currentSessionId);
             
-            // Prepare for streaming response
-            let responseText = '';
-            let responseCitation = null;
-            let responseSessionId = null;
-            
-            // Create a new EventSource for this request
-            const eventSource = new EventSource(`/api/chat?sessionId=${currentSessionId}`);
-            
-            // Send message to backend using fetch to initiate the stream
-            fetch('/api/chat', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    message,
-                    sessionId: currentSessionId,
-                    history: chatSession
-                })
-            }).catch(error => {
-                console.error('Error sending message:', error);
-                botMessageElement.innerHTML = 'Failed to send message. Please try again.';
-                eventSource.close();
-            });
-            
-            // Set a timeout to handle cases where the server doesn't respond
-            const timeoutId = setTimeout(() => {
-                console.error('Response timeout');
-                botMessageElement.innerHTML = 'Server response timeout. Please try again.';
-                eventSource.close();
-            }, 30000); // 30 seconds timeout
-            
-            // Handle streaming events
-            eventSource.onmessage = (event) => {
-                try {
-                    console.log('Raw event data:', event.data);
-                    const data = JSON.parse(event.data);
-                    console.log('Parsed event:', data);
-                    
-                    // Clear timeout on any message
-                    clearTimeout(timeoutId);
-                    
-                    // Handle different event types
-                    switch (data.type) {
-                        case 'start':
-                            // Clear the "Thinking..." message when streaming starts
-                            botMessageElement.innerHTML = '';
-                            break;
-                            
-                        case 'metadata':
-                            responseSessionId = data.sessionId;
-                            // Clear the "Thinking..." message if not already cleared
-                            if (botMessageElement.innerHTML.includes('Thinking')) {
-                                botMessageElement.innerHTML = '';
-                            }
-                            break;
-                            
-                        case 'chunk':
-                            // Append chunk to response text
-                            responseText += data.content;
-                            // Update the message with current text
-                            botMessageElement.innerHTML = responseText.replace(/\n/g, '<br>');
-                            break;
-                            
-                        case 'citation':
-                            responseCitation = data.citation;
-                            console.log("Received citation:", data.citation);
-                            break;
-                            
-                        case 'done':
-                            // If we got 'done' but no text, show an error
-                            if (!responseText) {
-                                botMessageElement.innerHTML = 'No response received. Please try again.';
-                                eventSource.close();
-                                return;
-                            }
-                            
-                            // Add citation if available
-                            if (responseCitation) {
-                                const citationElement = document.createElement('div');
-                                citationElement.className = 'citation';
-                                citationElement.innerHTML = `<a href="${responseCitation}" target="_blank" rel="noopener noreferrer">Source</a>`;
-                                botMessageElement.appendChild(citationElement);
-                            }
-                            
-                            // Update chat session
-                            updateChatSession(currentSessionId, message, responseText);
-                            
-                            // Update chat history title with summary
-                            updateChatHistoryTitle(currentSessionId, message);
-                            
-                            // Close the event source
-                            eventSource.close();
-                            break;
-                            
-                        case 'error':
-                            botMessageElement.innerHTML = `Error: ${data.message || 'Unknown error'}`;
-                            eventSource.close();
-                            break;
-                            
-                        default:
-                            console.warn('Unknown event type:', data.type);
-                    }
-                    
-                    // Scroll to bottom
-                    chatMessages.scrollTop = chatMessages.scrollHeight;
-                } catch (error) {
-                    console.error('Error parsing event data:', error, event.data);
-                    botMessageElement.innerHTML = 'Error processing response. Please try again.';
-                    eventSource.close();
-                    clearTimeout(timeoutId);
-                }
-            };
-            
-            // Handle connection errors
-            eventSource.onerror = (error) => {
-                console.error('EventSource error:', error);
-                botMessageElement.innerHTML = 'Connection error. Please try again.';
-                eventSource.close();
-                clearTimeout(timeoutId);
-            };
+            // Send message via WebSocket
+            socket.send(JSON.stringify({
+                type: 'chat',
+                sessionId: currentSessionId,
+                message: message,
+                history: chatSession
+            }));
             
         } catch (error) {
             console.error('Error:', error);
@@ -283,6 +334,14 @@ document.addEventListener('DOMContentLoaded', () => {
             currentSessionId = sessionId;
             setActiveChat(sessionId);
             loadChatMessages(sessionId);
+            
+            // Register with WebSocket if connected
+            if (isConnected) {
+                socket.send(JSON.stringify({
+                    type: 'register',
+                    sessionId: currentSessionId
+                }));
+            }
         });
         
         chatHistory.appendChild(chatItem);
