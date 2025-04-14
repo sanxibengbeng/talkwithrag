@@ -62,6 +62,7 @@ body {
     padding: 10px 15px;
     border-radius: 15px;
     margin-bottom: 5px;
+    white-space: pre-line;  /* Preserves line breaks */
 }
 
 .user-message {
@@ -73,6 +74,17 @@ body {
 .bot-message {
     align-self: flex-start;
     background-color: #f1f1f1;
+}
+
+.citation {
+    margin-top: 8px;
+    font-size: 0.8em;
+    text-align: right;
+}
+
+.citation a {
+    color: #6c757d;
+    text-decoration: underline;
 }
 
 .chat-input-container {

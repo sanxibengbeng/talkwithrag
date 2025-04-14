@@ -72,8 +72,8 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const data = await response.json();
             
-            // Add bot response to UI
-            addMessage(data.response, 'bot');
+            // Add bot response to UI with citation if available
+            addMessage(data.response, 'bot', data.citation);
             
             // Update chat session
             updateChatSession(currentSessionId, message, data.response);
@@ -95,10 +95,22 @@ document.addEventListener('DOMContentLoaded', () => {
         return Date.now().toString();
     }
     
-    function addMessage(content, sender) {
+    function addMessage(content, sender, citation = null) {
         const messageElement = document.createElement('div');
         messageElement.className = `message ${sender}-message`;
-        messageElement.textContent = content;
+        
+        // Replace \n with <br> for proper line breaks
+        const formattedContent = content.replace(/\n/g, '<br>');
+        messageElement.innerHTML = formattedContent;
+        
+        // Add citation if available
+        if (citation && sender === 'bot') {
+            const citationElement = document.createElement('div');
+            citationElement.className = 'citation';
+            citationElement.innerHTML = `<a href="${citation}" target="_blank" rel="noopener noreferrer">Source</a>`;
+            messageElement.appendChild(citationElement);
+        }
+        
         chatMessages.appendChild(messageElement);
         
         // Scroll to bottom
@@ -206,7 +218,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const chatSession = getChatSession(sessionId);
         
         chatSession.forEach(message => {
-            addMessage(message.content, message.role === 'user' ? 'user' : 'bot');
+            // We don't have citation for historical messages, so pass null
+            addMessage(message.content, message.role === 'user' ? 'user' : 'bot', null);
         });
     }
     

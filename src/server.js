@@ -27,13 +27,26 @@ const chatSessions = new Map();
 async function summarizeHistory(history, message) {
     if (history.length === 0) return message;
     
+    // Include the current message in the conversation to be summarized
+    const fullConversation = [
+        ...history,
+        { role: 'user', content: message }
+    ];
+    
     const messages = [
         {
             role: "user",
             content: [
                 {
                     type: "text",
-                    text: `Please summarize the following conversation into a concise question that captures the user's background and latest query. return the summarize and question. no additional context:\n\n${history.map(msg => `${msg.role}: ${msg.content}`).join('\n')}`
+                    text: `请分析以下对话内容，并提供两部分信息：
+1. 客户背景信息：总结客户之前提到的关键信息、问题和需求
+2. 当前问题：明确提取客户最新的问题或请求
+
+请使用简洁的语言，确保包含所有重要细节。仅返回这两部分内容，不要添加其他解释。
+
+对话内容：
+${fullConversation.map(msg => `${msg.role === 'user' ? '客户' : '客服'}: ${msg.content}`).join('\n')}`
                 }
             ]
         }
@@ -46,9 +59,9 @@ async function summarizeHistory(history, message) {
         accept: 'application/json',
         body: JSON.stringify({
             anthropic_version: "bedrock-2023-05-31",
-            max_tokens: 300,
+            max_tokens: 500,
             messages: messages,
-            temperature: 0,
+            temperature: 0.1,
             top_p: 0.9
         })
     };
@@ -57,11 +70,11 @@ async function summarizeHistory(history, message) {
         const command = new InvokeModelCommand(params);
         const response = await bedrockRuntime.send(command);
         const responseBody = JSON.parse(new TextDecoder().decode(response.body));
-        console.log("summarize history", responseBody.content)
-        return "user background:" + responseBody.content[0].text + "current question: " + message;
+        console.log("summarize history response:", responseBody.content)
+        return responseBody.content[0].text;
     } catch (error) {
         console.error('Error summarizing history:', error);
-        return history.length > 0 ? history[history.length - 1].content : '';
+        return message;
     }
 }
 
@@ -164,11 +177,11 @@ app.post('/api/chat', async (req, res) => {
         
         const currentHistory = [...history];
         
-        // Summarize the conversation to get the latest intent
-        const summarizedQuestion = await summarizeHistory(currentHistory, message);
+        // Summarize the conversation to get the latest intent and background
+        const summarizedContent = await summarizeHistory(currentHistory, message);
         
-        // Query the RAG knowledge base with a new session each time
-        const ragResponse = await queryRAG(summarizedQuestion);
+        // Query the RAG knowledge base with the summarized content
+        const ragResponse = await queryRAG(summarizedContent);
         
         // Update chat history
         currentHistory.push({ role: 'user', content: message });
