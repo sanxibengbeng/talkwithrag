@@ -70,7 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Handle WebSocket messages
     let currentBotMessageElement = null;
     let currentResponseText = '';
-    let currentResponseCitation = null;
+    let currentResponseCitations = [];
     
     function handleWebSocketMessage(data) {
         // Ensure we have a bot message element to update
@@ -87,7 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Clear the "Thinking..." message when streaming starts
                 currentBotMessageElement.innerHTML = '';
                 currentResponseText = '';
-                currentResponseCitation = null;
+                currentResponseCitations = [];
                 break;
                 
             case 'metadata':
@@ -107,8 +107,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 break;
                 
             case 'citation':
-                currentResponseCitation = data.citation;
-                console.log("Received citation:", data.citation);
+                // 保留单个引用的处理，用于向后兼容
+                if (!currentResponseCitations.some(c => c.url === data.citation)) {
+                    currentResponseCitations.push({
+                        url: data.citation,
+                        title: null
+                    });
+                }
+                console.log("Received single citation:", data.citation);
+                break;
+                
+            case 'citations':
+                // 处理新的引用数组
+                currentResponseCitations = data.citations;
+                console.log("Received citations:", data.citations);
                 break;
                 
             case 'done':
@@ -118,12 +130,47 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
                 
-                // Add citation if available
-                if (currentResponseCitation) {
-                    const citationElement = document.createElement('div');
-                    citationElement.className = 'citation';
-                    citationElement.innerHTML = `<a href="${currentResponseCitation}" target="_blank" rel="noopener noreferrer">Source</a>`;
-                    currentBotMessageElement.appendChild(citationElement);
+                // Add citations if available
+                if (currentResponseCitations && currentResponseCitations.length > 0) {
+                    const citationsContainer = document.createElement('div');
+                    citationsContainer.className = 'citations-container';
+                    
+                    // 添加引用标题
+                    if (currentResponseCitations.length > 1) {
+                        const citationsTitle = document.createElement('div');
+                        citationsTitle.className = 'citations-title';
+                        citationsTitle.textContent = '参考资料:';
+                        citationsContainer.appendChild(citationsTitle);
+                    }
+                    
+                    // 添加每个引用
+                    currentResponseCitations.forEach((citation, index) => {
+                        const citationElement = document.createElement('div');
+                        citationElement.className = 'citation';
+                        
+                        // 创建链接
+                        const link = document.createElement('a');
+                        link.href = citation.url;
+                        link.target = '_blank';
+                        link.rel = 'noopener noreferrer';
+                        
+                        // 使用标题或URL作为链接文本
+                        link.textContent = citation.title || `参考资料 ${index + 1}`;
+                        
+                        citationElement.appendChild(link);
+                        
+                        // 如果有摘要，添加摘要
+                        if (citation.snippet) {
+                            const snippet = document.createElement('div');
+                            snippet.className = 'citation-snippet';
+                            snippet.textContent = citation.snippet;
+                            citationElement.appendChild(snippet);
+                        }
+                        
+                        citationsContainer.appendChild(citationElement);
+                    });
+                    
+                    currentBotMessageElement.appendChild(citationsContainer);
                 }
                 
                 // Get the last user message

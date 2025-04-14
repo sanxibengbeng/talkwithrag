@@ -20,8 +20,7 @@ const wss = new WebSocket.Server({ server });
 const MODEL_REGION = 'us-west-2';
 const RAG_REGION = 'us-east-1';
 const KNOWLEDGE_BASE_ID = 'YUX1OWHQBE';
-//const MODEL_ID = 'anthropic.claude-3-5-haiku-20241022-v1:0';
-const MODEL_ID = 'anthropic.claude-3-5-sonnet-20240620-v1:0';
+const MODEL_ID = 'anthropic.claude-3-5-haiku-20241022-v1:0';
 
 const bedrockRuntime = new BedrockRuntimeClient({ region: MODEL_REGION });
 const bedrockAgentRuntime = new BedrockAgentRuntimeClient({ region: RAG_REGION });
@@ -200,7 +199,7 @@ async function streamRAG(question, ws) {
         const response = await bedrockAgentRuntime.send(command);
 
         let fullText = '';
-        let citation = null;
+        let citations = [];
         let responseSessionId = null;
         let hasChunks = false;
 
@@ -224,41 +223,25 @@ async function streamRAG(question, ws) {
                     content: textChunk 
                 }));
             } 
-            // Handle retrieval results (citations)
-            else if (event.retrievalResults) {
-                console.log("Received retrieval results:", JSON.stringify(event.retrievalResults, null, 2));
-                
-                try {
-                    const retrievalResults = event.retrievalResults;
-                    
-                    if (retrievalResults.retrievedReferences && retrievalResults.retrievedReferences.length > 0) {
-                        // Process each reference
-                        for (const reference of retrievalResults.retrievedReferences) {
-                            if (reference.location) {
-                                const location = reference.location;
-                                let citationUrl = null;
-                                
-                                if (location.type === "S3") {
-                                    citationUrl = location.s3Location?.uri;
-                                } else if (location.type === "WEB") {
-                                    citationUrl = location.webLocation?.url;
-                                }
-                                
-                                // Send citation to client if available
-                                if (citationUrl) {
-                                    citation = citationUrl; // Store the last citation
-                                    console.log("Sending citation:", citationUrl);
-                                    ws.send(JSON.stringify({ 
-                                        type: 'citation', 
-                                        citation: citationUrl 
-                                    }));
-                                }
-                            }
-                        }
+            // 处理引用信息
+            else if (event?.citation) {
+                // 获取所有引用
+                const references = event.citation?.retrievedReferences;
+                let s3Uri = ""
+
+                // 遍历引用
+                references.forEach(reference => {
+                    // 获取 s3Location.uri (如果存在)
+                    if (reference.location && reference.location.s3Location) {
+                        s3Uri = reference.location.s3Location.uri;
+                        console.log("S3 URI:", s3Uri);
                     }
-                } catch (error) {
-                    console.error("Error processing retrieval results:", error);
-                }
+                });
+                citations.push(s3Uri)
+                ws.send(JSON.stringify({ 
+                    type: 'citation', 
+                    citation: s3Uri
+                }));
             }
             // Handle metadata (session ID)
             else if (event.metadata) {
@@ -293,7 +276,7 @@ async function streamRAG(question, ws) {
         
         return { 
             text: fullText, 
-            citation, 
+            citations: citations, 
             sessionId: responseSessionId 
         };
     } catch (error) {
