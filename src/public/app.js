@@ -41,17 +41,25 @@ document.addEventListener('DOMContentLoaded', () => {
         messageInput.value = '';
         
         try {
-            // Show loading indicator
-            const loadingElement = document.createElement('div');
-            loadingElement.className = 'message bot-message';
-            loadingElement.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div> Thinking...';
-            chatMessages.appendChild(loadingElement);
+            // Create message container for bot response
+            const botMessageElement = document.createElement('div');
+            botMessageElement.className = 'message bot-message';
+            botMessageElement.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div> Thinking...';
+            chatMessages.appendChild(botMessageElement);
             
             // Get chat history for this session
             const chatSession = getChatSession(currentSessionId);
             
-            // Send message to backend
-            const response = await fetch('/api/chat', {
+            // Prepare for streaming response
+            let responseText = '';
+            let responseCitation = null;
+            let responseSessionId = null;
+            
+            // Create a new EventSource for this request
+            const eventSource = new EventSource(`/api/chat?sessionId=${currentSessionId}`);
+            
+            // Send message to backend using fetch to initiate the stream
+            fetch('/api/chat', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -61,25 +69,108 @@ document.addEventListener('DOMContentLoaded', () => {
                     sessionId: currentSessionId,
                     history: chatSession
                 })
+            }).catch(error => {
+                console.error('Error sending message:', error);
+                botMessageElement.innerHTML = 'Failed to send message. Please try again.';
+                eventSource.close();
             });
             
-            // Remove loading indicator
-            chatMessages.removeChild(loadingElement);
+            // Set a timeout to handle cases where the server doesn't respond
+            const timeoutId = setTimeout(() => {
+                console.error('Response timeout');
+                botMessageElement.innerHTML = 'Server response timeout. Please try again.';
+                eventSource.close();
+            }, 30000); // 30 seconds timeout
             
-            if (!response.ok) {
-                throw new Error('Failed to get response');
-            }
+            // Handle streaming events
+            eventSource.onmessage = (event) => {
+                try {
+                    console.log('Raw event data:', event.data);
+                    const data = JSON.parse(event.data);
+                    console.log('Parsed event:', data);
+                    
+                    // Clear timeout on any message
+                    clearTimeout(timeoutId);
+                    
+                    // Handle different event types
+                    switch (data.type) {
+                        case 'start':
+                            // Clear the "Thinking..." message when streaming starts
+                            botMessageElement.innerHTML = '';
+                            break;
+                            
+                        case 'metadata':
+                            responseSessionId = data.sessionId;
+                            // Clear the "Thinking..." message if not already cleared
+                            if (botMessageElement.innerHTML.includes('Thinking')) {
+                                botMessageElement.innerHTML = '';
+                            }
+                            break;
+                            
+                        case 'chunk':
+                            // Append chunk to response text
+                            responseText += data.content;
+                            // Update the message with current text
+                            botMessageElement.innerHTML = responseText.replace(/\n/g, '<br>');
+                            break;
+                            
+                        case 'citation':
+                            responseCitation = data.citation;
+                            console.log("Received citation:", data.citation);
+                            break;
+                            
+                        case 'done':
+                            // If we got 'done' but no text, show an error
+                            if (!responseText) {
+                                botMessageElement.innerHTML = 'No response received. Please try again.';
+                                eventSource.close();
+                                return;
+                            }
+                            
+                            // Add citation if available
+                            if (responseCitation) {
+                                const citationElement = document.createElement('div');
+                                citationElement.className = 'citation';
+                                citationElement.innerHTML = `<a href="${responseCitation}" target="_blank" rel="noopener noreferrer">Source</a>`;
+                                botMessageElement.appendChild(citationElement);
+                            }
+                            
+                            // Update chat session
+                            updateChatSession(currentSessionId, message, responseText);
+                            
+                            // Update chat history title with summary
+                            updateChatHistoryTitle(currentSessionId, message);
+                            
+                            // Close the event source
+                            eventSource.close();
+                            break;
+                            
+                        case 'error':
+                            botMessageElement.innerHTML = `Error: ${data.message || 'Unknown error'}`;
+                            eventSource.close();
+                            break;
+                            
+                        default:
+                            console.warn('Unknown event type:', data.type);
+                    }
+                    
+                    // Scroll to bottom
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                } catch (error) {
+                    console.error('Error parsing event data:', error, event.data);
+                    botMessageElement.innerHTML = 'Error processing response. Please try again.';
+                    eventSource.close();
+                    clearTimeout(timeoutId);
+                }
+            };
             
-            const data = await response.json();
-            
-            // Add bot response to UI with citation if available
-            addMessage(data.response, 'bot', data.citation);
-            
-            // Update chat session
-            updateChatSession(currentSessionId, message, data.response);
-            
-            // Update chat history title with summary
-            updateChatHistoryTitle(currentSessionId, message);
+            // Handle connection errors
+            eventSource.onerror = (error) => {
+                console.error('EventSource error:', error);
+                botMessageElement.innerHTML = 'Connection error. Please try again.';
+                eventSource.close();
+                clearTimeout(timeoutId);
+            };
             
         } catch (error) {
             console.error('Error:', error);
