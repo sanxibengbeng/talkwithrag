@@ -1,11 +1,11 @@
 const express = require('express');
-const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
+// const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
 const { BedrockAgentRuntimeClient, RetrieveAndGenerateStreamCommand } = require('@aws-sdk/client-bedrock-agent-runtime');
 const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const path = require('path');
-const fs = require('fs').promises;
-const { v4: uuidv4 } = require('uuid');
+// const fs = require('fs').promises;
+// const { v4: uuidv4 } = require('uuid');
 const http = require('http');
 const WebSocket = require('ws');
 
@@ -19,13 +19,13 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 // AWS Configuration
-const MODEL_REGION = 'us-west-2';
+// const MODEL_REGION = 'us-west-2';
 const RAG_REGION = 'us-east-1';
 const KNOWLEDGE_BASE_ID = 'YUX1OWHQBE';
-const MODEL_ID = 'anthropic.claude-3-5-haiku-20241022-v1:0';
+// const MODEL_ID = 'anthropic.claude-3-5-haiku-20241022-v1:0';
 const PRESIGNED_URL_EXPIRATION = 86400; // 1 day in seconds
 
-const bedrockRuntime = new BedrockRuntimeClient({ region: MODEL_REGION });
+// const bedrockRuntime = new BedrockRuntimeClient({ region: MODEL_REGION });
 const bedrockAgentRuntime = new BedrockAgentRuntimeClient({ region: RAG_REGION });
 const s3Client = new S3Client({ region: RAG_REGION });
 
@@ -36,7 +36,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 const chatSessions = new Map();
 const knowledgebaseSessions = new Map();
 const MAX_HISTORY_LENGTH = 20; // Limit stored chat history
-const MAX_SUMMARY_HISTORY = 10; // Limit messages sent for summarization
+// const MAX_SUMMARY_HISTORY = 10; // Limit messages sent for summarization
 
 // WebSocket connections map
 const wsConnections = new Map();
@@ -133,60 +133,60 @@ wss.on('connection', (ws, req) => {
 });
 
 // Summarize chat history using Claude
-async function summarizeHistory(history, message) {
-    if (history.length === 0) return message;
+// async function summarizeHistory(history, message) {
+//     if (history.length === 0) return message;
 
-    const fullConversation = [...history, { role: 'user', content: message }];
-    const messages = [
-        {
-            role: 'user',
-            content: [
-                {
-                    type: 'text',
-                    text: `Please analyze the following conversation and extract two key components:
+//     const fullConversation = [...history, { role: 'user', content: message }];
+//     const messages = [
+//         {
+//             role: 'user',
+//             content: [
+//                 {
+//                     type: 'text',
+//                     text: `Please analyze the following conversation and extract two key components:
 
-1. Customer Profile:
-   - Extract personal background, needs, and pain points
-   - Summarize key information and historical issues previously mentioned
-   - Identify customer priorities and preferences
+// 1. Customer Profile:
+//    - Extract personal background, needs, and pain points
+//    - Summarize key information and historical issues previously mentioned
+//    - Identify customer priorities and preferences
 
-2. Current Inquiry Focus:
-   - Clearly define the core problem or request most recently expressed
-   - Extract any time-sensitive elements or urgent needs
-   - Identify the type of solution the customer expects
+// 2. Current Inquiry Focus:
+//    - Clearly define the core problem or request most recently expressed
+//    - Extract any time-sensitive elements or urgent needs
+//    - Identify the type of solution the customer expects
 
-Present your analysis in concise, structured bullet points, ensuring all information valuable for follow-up service is included. Provide only these two components without additional explanation.
+// Present your analysis in concise, structured bullet points, ensuring all information valuable for follow-up service is included. Provide only these two components without additional explanation.
 
-Conversation:
-${fullConversation.map(msg => `${msg.role === 'user' ? '客户' : '客服'}: ${msg.content}`).join('\n')}`
-                }
-            ]
-        }
-    ];
+// Conversation:
+// ${fullConversation.map(msg => `${msg.role === 'user' ? '客户' : '客服'}: ${msg.content}`).join('\n')}`
+//                 }
+//             ]
+//         }
+//     ];
 
-    const params = {
-        modelId: MODEL_ID,
-        contentType: 'application/json',
-        accept: 'application/json',
-        body: JSON.stringify({
-            anthropic_version: 'bedrock-2023-05-31',
-            max_tokens: 500,
-            messages,
-            temperature: 0.1,
-            top_p: 0.9
-        })
-    };
+//     const params = {
+//         modelId: MODEL_ID,
+//         contentType: 'application/json',
+//         accept: 'application/json',
+//         body: JSON.stringify({
+//             anthropic_version: 'bedrock-2023-05-31',
+//             max_tokens: 500,
+//             messages,
+//             temperature: 0.1,
+//             top_p: 0.9
+//         })
+//     };
 
-    try {
-        const command = new InvokeModelCommand(params);
-        const response = await bedrockRuntime.send(command);
-        const responseBody = JSON.parse(new TextDecoder().decode(response.body));
-        return responseBody.content[0].text;
-    } catch (error) {
-        console.error('Error summarizing history:', error);
-        return message; // Fallback to original message on error
-    }
-}
+//     try {
+//         const command = new InvokeModelCommand(params);
+//         const response = await bedrockRuntime.send(command);
+//         const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+//         return responseBody.content[0].text;
+//     } catch (error) {
+//         console.error('Error summarizing history:', error);
+//         return message; // Fallback to original message on error
+//     }
+// }
 
 // Generate a presigned URL for an S3 object
 async function generatePresignedUrl(s3Uri) {
