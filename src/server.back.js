@@ -30,7 +30,6 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // In-memory chat session storage (replace with a database in production)
 const chatSessions = new Map();
-const knowledgebaseSessions = new Map();
 const MAX_HISTORY_LENGTH = 20; // Limit stored chat history
 const MAX_SUMMARY_HISTORY = 10; // Limit messages sent for summarization
 
@@ -75,12 +74,16 @@ wss.on('connection', (ws, req) => {
                 // Use server-stored history
                 let currentHistory = chatSessions.get(sessionId) || [];
                 
+                // Limit history for summarization
+                const historyForSummary = currentHistory.slice(-MAX_SUMMARY_HISTORY);
+                const summarizedContent = await summarizeHistory(historyForSummary, message);
+                
                 // Send start event
                 ws.send(JSON.stringify({ type: 'start' }));
                 
                 // Stream RAG response
                 try {
-                    const ragResponse = await streamRAG(message, sessionId, ws);
+                    const ragResponse = await streamRAG(summarizedContent, ws);
                     
                     // Update and limit chat history
                     currentHistory.push({ role: 'user', content: message });
@@ -185,47 +188,15 @@ ${fullConversation.map(msg => `${msg.role === 'user' ? '客户' : '客服'}: ${m
 }
 
 // Stream response from RAG knowledge base
-async function streamRAG(question,seesionId, ws) {
-    ragSessionID = knowledgebaseSessions.get(seesionId) || ""
+async function streamRAG(question, ws) {
     const input = {
-        seesionId: ragSessionID,
         input: { text: question },
         retrieveAndGenerateConfiguration: {
             type: 'KNOWLEDGE_BASE',
             knowledgeBaseConfiguration: {
                 knowledgeBaseId: KNOWLEDGE_BASE_ID,
-                // modelArn: `arn:aws:bedrock:${RAG_REGION}::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0`,
-                modelArn: `arn:aws:bedrock:us-east-1:873543029686:inference-profile/us.anthropic.claude-3-5-haiku-20241022-v1:0`,
-                orchestrationConfiguration: {
-                    inferenceConfig: {
-                        textInferenceConfig: {
-                            maxTokens: 4096,
-                            stopSequences: [
-                                "\nObservation"
-                            ],
-                            temperature: 0,
-                            topP: 1
-                        }
-                    }
-                },
-                retrievalConfiguration: {
-                    vectorSearchConfiguration: {
-                        numberOfResults: 10,
-                        overrideSearchType: "HYBRID"
-                    }
-                },
-                generationConfiguration: {
-                    inferenceConfig: {
-                        textInferenceConfig: {
-                            maxTokens: 4096,
-                            stopSequences: [
-                                "\nObservation"
-                            ],
-                            temperature: 0,
-                            topP: 1
-                        }
-                    }
-                }
+                //modelArn: `arn:aws:bedrock:${RAG_REGION}::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0`
+                modelArn: `arn:aws:bedrock:us-east-1:873543029686:inference-profile/us.anthropic.claude-3-5-haiku-20241022-v1:0`
             }
         }
     };
@@ -238,23 +209,13 @@ async function streamRAG(question,seesionId, ws) {
 
         let fullText = '';
         let citations = [];
+        let responseSessionId = null;
         let hasChunks = false;
 
-        // Extract session ID from headers
-        let responseSessionId = response.sessionId
-        // Log the header for debugging
-        console.log("Session ID from header:", responseSessionId);
-
-        // If session ID was found in header, send it to client
-        if (responseSessionId) {
-            knowledgebaseSessions.set(seesionId, responseSessionId)
-            ws.send(JSON.stringify({
-                type: 'responseSessionId',
-                sessionId: responseSessionId
-            }));
-        }
-
         for await (const event of response.stream) {
+            // Log event type for debugging
+            const eventTypes = Object.keys(event);
+            
             // Handle text chunks
             if (event?.output) {
                 hasChunks = true;
@@ -287,6 +248,22 @@ async function streamRAG(question,seesionId, ws) {
                     type: 'citation', 
                     citation: s3Uri
                 }));
+            }
+            // Handle metadata (session ID)
+            else if (event.metadata) {
+                console.log("Received metadata:", JSON.stringify(event.metadata, null, 2));
+                
+                try {
+                    if (event.metadata.sessionId) {
+                        responseSessionId = event.metadata.sessionId;
+                        ws.send(JSON.stringify({ 
+                            type: 'metadata', 
+                            sessionId: responseSessionId 
+                        }));
+                    }
+                } catch (error) {
+                    console.error("Error processing metadata:", error);
+                }
             }
             // Log any unexpected event types
             else {
