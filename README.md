@@ -75,7 +75,7 @@ npm run dev
 
 - 知识库ID: YUX1OWHQBE 这个值是AWS Bedrock knowledgebase的id，需要提前在AWS console 启动 并传入文档；
 - 区域: us-east-1
-- 使用模型: Claude 3.5 Haiku  POC选择的 3.5Haiku 模型，可以切换到claude 3.5/3.7 sonnet等模型体验效果；
+- RAG使用模型: Claude 3.5 Haiku  POC选择的 3.5Haiku 模型，可以切换到claude 3.5/3.7 sonnet等模型体验效果；
 
 ### 权限要求
 
