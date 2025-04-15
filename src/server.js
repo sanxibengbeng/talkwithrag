@@ -1,6 +1,8 @@
 const express = require('express');
 const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
 const { BedrockAgentRuntimeClient, RetrieveAndGenerateStreamCommand } = require('@aws-sdk/client-bedrock-agent-runtime');
+const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const path = require('path');
 const fs = require('fs').promises;
 const { v4: uuidv4 } = require('uuid');
@@ -21,9 +23,11 @@ const MODEL_REGION = 'us-west-2';
 const RAG_REGION = 'us-east-1';
 const KNOWLEDGE_BASE_ID = 'YUX1OWHQBE';
 const MODEL_ID = 'anthropic.claude-3-5-haiku-20241022-v1:0';
+const PRESIGNED_URL_EXPIRATION = 86400; // 1 day in seconds
 
 const bedrockRuntime = new BedrockRuntimeClient({ region: MODEL_REGION });
 const bedrockAgentRuntime = new BedrockAgentRuntimeClient({ region: RAG_REGION });
+const s3Client = new S3Client({ region: RAG_REGION });
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -184,7 +188,43 @@ ${fullConversation.map(msg => `${msg.role === 'user' ? '客户' : '客服'}: ${m
     }
 }
 
-// Stream response from RAG knowledge base
+// Generate a presigned URL for an S3 object
+async function generatePresignedUrl(s3Uri) {
+    try {
+        // Parse the S3 URI to extract bucket and key
+        // Format: s3://bucket-name/path/to/object
+        if (!s3Uri || !s3Uri.startsWith('s3://')) {
+            console.error('Invalid S3 URI format:', s3Uri);
+            return s3Uri; // Return original URI if invalid
+        }
+
+        const uriWithoutProtocol = s3Uri.substring(5); // Remove 's3://'
+        const firstSlashIndex = uriWithoutProtocol.indexOf('/');
+        
+        if (firstSlashIndex === -1) {
+            console.error('Invalid S3 URI format (no key):', s3Uri);
+            return s3Uri;
+        }
+        
+        const bucketName = uriWithoutProtocol.substring(0, firstSlashIndex);
+        const objectKey = uriWithoutProtocol.substring(firstSlashIndex + 1);
+        
+        // Create the command to get the object
+        const command = new GetObjectCommand({
+            Bucket: bucketName,
+            Key: objectKey
+        });
+        
+        // Generate the presigned URL with 1-day expiration
+        const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: PRESIGNED_URL_EXPIRATION });
+        console.log(`Generated presigned URL for ${s3Uri}`);
+        
+        return presignedUrl;
+    } catch (error) {
+        console.error('Error generating presigned URL:', error);
+        return s3Uri; // Return original URI on error
+    }
+}
 async function streamRAG(question,seesionId, ws) {
     ragSessionID = knowledgebaseSessions.get(seesionId) || ""
     const input = {
@@ -282,10 +322,14 @@ async function streamRAG(question,seesionId, ws) {
                         s3Uri = reference.location.s3Location.uri;
                     }
                 });
-                citations.push(s3Uri)
+                
+                // Generate presigned URL for the S3 URI
+                const presignedUrl = await generatePresignedUrl(s3Uri);
+                
+                citations.push(presignedUrl);
                 ws.send(JSON.stringify({ 
                     type: 'citation', 
-                    citation: s3Uri
+                    citation: presignedUrl
                 }));
             }
             // Log any unexpected event types
