@@ -20,8 +20,13 @@ const wss = new WebSocket.Server({ server });
 
 // AWS Configuration
 // const MODEL_REGION = 'us-west-2';
-const RAG_REGION = 'us-east-1';
-const KNOWLEDGE_BASE_ID = 'YUX1OWHQBE';
+// const RAG_REGION = 'us-east-1';
+// const KNOWLEDGE_BASE_ID = 'YUX1OWHQBE';
+// const modelArn =  `arn:aws:bedrock:us-east-1:873543029686:inference-profile/us.anthropic.claude-3-5-haiku-20241022-v1:0`
+const RAG_REGION = 'us-west-2';
+const KNOWLEDGE_BASE_ID = 'PGOTJNKSBU';
+//const modelArn =  `arn:aws:bedrock:${RAG_REGION}:873543029686:inference-profile/us.anthropic.claude-3-5-haiku-20241022-v1:0`
+const modelArn =  `arn:aws:bedrock:${RAG_REGION}::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0`
 // const MODEL_ID = 'anthropic.claude-3-5-haiku-20241022-v1:0';
 const PRESIGNED_URL_EXPIRATION = 86400; // 1 day in seconds
 
@@ -234,8 +239,7 @@ async function streamRAG(question,seesionId, ws) {
             type: 'KNOWLEDGE_BASE',
             knowledgeBaseConfiguration: {
                 knowledgeBaseId: KNOWLEDGE_BASE_ID,
-                // modelArn: `arn:aws:bedrock:${RAG_REGION}::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0`,
-                modelArn: `arn:aws:bedrock:us-east-1:873543029686:inference-profile/us.anthropic.claude-3-5-haiku-20241022-v1:0`,
+                modelArn: modelArn,
                 orchestrationConfiguration: {
                     inferenceConfig: {
                         textInferenceConfig: {

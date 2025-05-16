@@ -18,8 +18,10 @@ const wss = new WebSocket.Server({ server });
 
 // AWS Configuration
 const MODEL_REGION = 'us-west-2';
-const RAG_REGION = 'us-east-1';
-const KNOWLEDGE_BASE_ID = 'YUX1OWHQBE';
+// const RAG_REGION = 'us-east-1';
+// const KNOWLEDGE_BASE_ID = 'YUX1OWHQBE';
+const RAG_REGION = 'us-west-2';
+const KNOWLEDGE_BASE_ID = 'PGOTJNKSBU';
 const MODEL_ID = 'anthropic.claude-3-5-haiku-20241022-v1:0';
 
 const bedrockRuntime = new BedrockRuntimeClient({ region: MODEL_REGION });
